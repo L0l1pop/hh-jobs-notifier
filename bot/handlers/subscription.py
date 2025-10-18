@@ -3,10 +3,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardRemove
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import asyncio
 
 from database.models import User, Subscription
 from bot.keyboards.main_kb import get_main_keyboard, get_cancel_keyboard
 from bot.states.subscription_states import SubscriptionStates
+from parser.hh_client import HHClient
 
 router = Router()
 
@@ -35,10 +37,8 @@ async def process_keywords(message: Message, state: FSMContext):
         )
         return
     
-    # Сохраняем ключевые слова
     await state.update_data(keywords=message.text)
     
-    # Переходим к следующему шагу
     await state.set_state(SubscriptionStates.waiting_for_city)
     await message.answer(
         "🏙 <b>Шаг 2 из 4: Город</b>\n\n"
@@ -60,14 +60,11 @@ async def process_city(message: Message, state: FSMContext):
         )
         return
     
-    # Сохраняем город (если "-", то None)
     city = None if message.text.strip() == "-" else message.text
     await state.update_data(city=city)
     
-    # Переходим к опыту работы
     await state.set_state(SubscriptionStates.waiting_for_experience)
     
-    # Создаём клавиатуру с вариантами опыта
     from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
     experience_kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -99,7 +96,6 @@ async def process_experience(message: Message, state: FSMContext):
         )
         return
     
-    # Преобразуем текст в формат hh.ru API
     experience_map = {
         "Без опыта": "noExperience",
         "От 1 года": "between1And3",
@@ -111,7 +107,6 @@ async def process_experience(message: Message, state: FSMContext):
     experience = experience_map.get(message.text, None)
     await state.update_data(experience=experience)
     
-    # Переходим к зарплате
     await state.set_state(SubscriptionStates.waiting_for_salary)
     await message.answer(
         "💰 <b>Шаг 4 из 4: Зарплата</b>\n\n"
@@ -133,7 +128,6 @@ async def process_salary(message: Message, state: FSMContext, session: AsyncSess
         )
         return
     
-    # Проверяем зарплату
     salary_from = None
     if message.text.strip() != "-":
         try:
@@ -149,16 +143,13 @@ async def process_salary(message: Message, state: FSMContext, session: AsyncSess
             )
             return
     
-    # Получаем все сохранённые данные
     data = await state.get_data()
     
-    # Находим пользователя в БД
     result = await session.execute(
         select(User).where(User.telegram_id == message.from_user.id)
     )
     user = result.scalar_one()
     
-    # Создаём подписку
     subscription = Subscription(
         user_id=user.id,
         keywords=data['keywords'],
@@ -171,10 +162,8 @@ async def process_salary(message: Message, state: FSMContext, session: AsyncSess
     session.add(subscription)
     await session.commit()
     
-    # Очищаем состояние
     await state.clear()
     
-    # Формируем сообщение с подтверждением
     confirmation = (
         "✅ <b>Подписка успешно создана!</b>\n\n"
         f"🔍 Ключевые слова: <code>{data['keywords']}</code>\n"
@@ -207,7 +196,6 @@ async def process_salary(message: Message, state: FSMContext, session: AsyncSess
 async def show_subscriptions(message: Message, session: AsyncSession):
     """Показать все подписки пользователя"""
     
-    # Получаем пользователя
     result = await session.execute(
         select(User).where(User.telegram_id == message.from_user.id)
     )
@@ -217,7 +205,6 @@ async def show_subscriptions(message: Message, session: AsyncSession):
         await message.answer("❌ Пользователь не найден")
         return
     
-    # Получаем подписки
     result = await session.execute(
         select(Subscription).where(
             Subscription.user_id == user.id,
@@ -234,7 +221,6 @@ async def show_subscriptions(message: Message, session: AsyncSession):
         )
         return
     
-    # Формируем список подписок
     response = f"📋 <b>Ваши подписки ({len(subscriptions)}):</b>\n\n"
     
     experience_text = {
@@ -261,3 +247,58 @@ async def show_subscriptions(message: Message, session: AsyncSession):
     response += "💡 Для управления подписками используйте кнопки ниже каждой подписки"
     
     await message.answer(response, reply_markup=get_main_keyboard())
+
+
+@router.message(F.text == "🔍 Тест поиска")
+async def test_search(message: Message, session: AsyncSession):
+    """Тестовый поиск вакансий по первой подписке"""
+    
+    result = await session.execute(
+        select(User).where(User.telegram_id == message.from_user.id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        await message.answer("❌ Пользователь не найден")
+        return
+    
+    result = await session.execute(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.is_active == True
+        ).limit(1)
+    )
+    subscription = result.scalar_one_or_none()
+    
+    if not subscription:
+        await message.answer("❌ У вас нет активных подписок")
+        return
+    
+    await message.answer("🔄 Ищу вакансии...")
+    
+    async with HHClient() as client:
+        vacancies = await client.search_vacancies(
+            text=subscription.keywords,
+            area=subscription.city,
+            experience=subscription.experience,
+            salary=subscription.salary_from,
+            per_page=5
+        )
+        
+        if not vacancies.get('items'):
+            await message.answer(
+                "😔 Вакансий по вашим критериям не найдено.\n"
+                "Попробуйте изменить параметры подписки."
+            )
+            return
+        
+        total_found = vacancies.get('found', 0)
+        await message.answer(
+            f"✅ Найдено вакансий: <b>{total_found}</b>\n"
+            f"Показываю первые {len(vacancies['items'])}:\n"
+        )
+        
+        for vacancy in vacancies['items']:
+            formatted_vacancy = client.format_vacancy(vacancy)
+            await message.answer(formatted_vacancy)
+            await asyncio.sleep(0.5) 
