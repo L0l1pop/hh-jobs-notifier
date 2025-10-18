@@ -52,4 +52,4 @@ async def cmd_help(message: Message):
         "📋 <b>Мои подписки</b> - посмотреть все активные подписки\n"
         "🗑 Удалить подписку можно через список подписок"
     )
-    await message.answer(help_text, parse_mode="HTML")
+    await message.answer(help_text)
