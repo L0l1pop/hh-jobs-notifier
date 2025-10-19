@@ -1,14 +1,15 @@
 from aiogram import Router, F
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
 
 from database.models import User, Subscription
-from bot.keyboards.main_kb import get_main_keyboard, get_cancel_keyboard
+from bot.keyboards.main_kb import get_main_keyboard, get_cancel_keyboard, get_subscription_actions
 from bot.states.subscription_states import SubscriptionStates
 from parser.hh_client import HHClient
+from bot.states.vacancy_view_states import VacancyViewStates
 
 router = Router()
 
@@ -221,8 +222,6 @@ async def show_subscriptions(message: Message, session: AsyncSession):
         )
         return
     
-    response = f"📋 <b>Ваши подписки ({len(subscriptions)}):</b>\n\n"
-    
     experience_text = {
         "noExperience": "Без опыта",
         "between1And3": "1-3 года",
@@ -231,7 +230,7 @@ async def show_subscriptions(message: Message, session: AsyncSession):
     }
     
     for i, sub in enumerate(subscriptions, 1):
-        response += f"<b>{i}.</b> 🔍 <code>{sub.keywords}</code>\n"
+        response = f"<b>{i}.</b> 🔍 <code>{sub.keywords}</code>\n"
         
         if sub.city:
             response += f"   🏙 {sub.city}\n"
@@ -240,19 +239,19 @@ async def show_subscriptions(message: Message, session: AsyncSession):
             response += f"   💼 {experience_text.get(sub.experience, sub.experience)}\n"
         
         if sub.salary_from:
-            response += f"   💰 От {sub.salary_from:,} ₽\n"
+            response += f"   💰 От {sub.salary_from:,} руб.\n"
         
-        response += "\n"
-    
-    response += "💡 Для управления подписками используйте кнопки ниже каждой подписки"
-    
-    await message.answer(response, reply_markup=get_main_keyboard())
+        await message.answer(
+            response,
+            reply_markup=get_subscription_actions(sub.id)
+        )
 
 
 @router.message(F.text == "🔍 Тест поиска")
-async def test_search(message: Message, session: AsyncSession):
-    """Тестовый поиск вакансий по первой подписке"""
+async def choose_subscription_for_view(message: Message, session: AsyncSession, state: FSMContext):
+    """Выбор подписки для просмотра вакансий"""
     
+    # Получаем пользователя
     result = await session.execute(
         select(User).where(User.telegram_id == message.from_user.id)
     )
@@ -262,43 +261,225 @@ async def test_search(message: Message, session: AsyncSession):
         await message.answer("❌ Пользователь не найден")
         return
     
+    # Получаем все активные подписки
     result = await session.execute(
         select(Subscription).where(
             Subscription.user_id == user.id,
             Subscription.is_active == True
-        ).limit(1)
+        )
+    )
+    subscriptions = result.scalars().all()
+    
+    if not subscriptions:
+        await message.answer("❌ У вас нет активных подписок")
+        return
+    
+    # Создаём inline-кнопки для выбора подписки
+    buttons = []
+    for sub in subscriptions:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"🔍 {sub.keywords}",
+                callback_data=f"view_sub_{sub.id}"
+            )
+        ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await message.answer(
+        "📋 Выберите подписку для просмотра вакансий:",
+        reply_markup=keyboard
+    )
+    await state.set_state(VacancyViewStates.choosing_subscription)
+
+
+@router.callback_query(F.data.startswith("view_sub_"))
+async def view_subscription_vacancies(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    """Просмотр вакансий по выбранной подписке"""
+    
+    subscription_id = int(callback.data.split("_")[-1])
+    
+    # Получаем подписку
+    result = await session.execute(
+        select(Subscription).where(Subscription.id == subscription_id)
     )
     subscription = result.scalar_one_or_none()
     
     if not subscription:
-        await message.answer("❌ У вас нет активных подписок")
+        await callback.answer("❌ Подписка не найдена")
         return
     
-    await message.answer("🔄 Ищу вакансии...")
+    # Сохраняем ID подписки и текущую страницу в состояние
+    await state.update_data(
+        subscription_id=subscription_id,
+        current_page=0
+    )
+    await state.set_state(VacancyViewStates.viewing_vacancies)
     
+    await callback.message.edit_text(
+        f"🔄 Ищу вакансии по запросу:\n<code>{subscription.keywords}</code>",
+        parse_mode="HTML"
+    )
+    
+    # Показываем первые 5 вакансий
+    await show_vacancies_page(callback.message, session, state, subscription)
+
+
+async def show_vacancies_page(message, session: AsyncSession, state: FSMContext, subscription: Subscription):
+    """Показать страницу с 5 вакансиями"""
+    
+    data = await state.get_data()
+    current_page = data.get('current_page', 0)
+    
+    # Получаем вакансии из HH API
     async with HHClient() as client:
-        vacancies = await client.search_vacancies(
+        vacancies_data = await client.search_vacancies(
             text=subscription.keywords,
             area=subscription.city,
             experience=subscription.experience,
             salary=subscription.salary_from,
-            per_page=5
+            per_page=5,
+            page=current_page
         )
-        
-        if not vacancies.get('items'):
-            await message.answer(
-                "😔 Вакансий по вашим критериям не найдено.\n"
-                "Попробуйте изменить параметры подписки."
-            )
-            return
-        
-        total_found = vacancies.get('found', 0)
+    
+    items = vacancies_data.get('items', [])
+    total_found = vacancies_data.get('found', 0)
+    
+    if not items:
         await message.answer(
-            f"✅ Найдено вакансий: <b>{total_found}</b>\n"
-            f"Показываю первые {len(vacancies['items'])}:\n"
+            "😔 Вакансий не найдено или закончились результаты.",
+            reply_markup=get_main_keyboard()
         )
-        
-        for vacancy in vacancies['items']:
-            formatted_vacancy = client.format_vacancy(vacancy)
-            await message.answer(formatted_vacancy)
-            await asyncio.sleep(0.5) 
+        await state.clear()
+        return
+    
+    # Отправляем информацию о количестве
+    await message.answer(
+        f"📊 Найдено: <b>{total_found}</b> вакансий\n"
+        f"Страница {current_page + 1}, показываю {len(items)} вакансий:",
+        parse_mode="HTML"
+    )
+    
+    # Отправляем каждую вакансию
+    for vacancy in items:
+        formatted = HHClient.format_vacancy(vacancy)
+        await message.answer(formatted, disable_web_page_preview=True)
+        await asyncio.sleep(0.3)
+    
+    # Кнопки для навигации
+    buttons = []
+    
+    # Проверяем, есть ли ещё страницы
+    pages_available = (current_page + 1) * 5 < total_found
+    
+    if pages_available:
+        buttons.append([
+            InlineKeyboardButton(
+                text="➡️ Показать ещё 5",
+                callback_data=f"next_page_{subscription.id}"
+            )
+        ])
+    
+    buttons.append([
+        InlineKeyboardButton(
+            text="✅ Завершить просмотр",
+            callback_data="finish_viewing"
+        )
+    ])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    await message.answer(
+        "Выберите действие:",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("next_page_"))
+async def show_next_page(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    """Показать следующие 5 вакансий"""
+    
+    subscription_id = int(callback.data.split("_")[-1])
+    
+    # Получаем подписку
+    result = await session.execute(
+        select(Subscription).where(Subscription.id == subscription_id)
+    )
+    subscription = result.scalar_one_or_none()
+    
+    if not subscription:
+        await callback.answer("❌ Подписка не найдена")
+        return
+    
+    # Увеличиваем номер страницы
+    data = await state.get_data()
+    current_page = data.get('current_page', 0) + 1
+    await state.update_data(current_page=current_page)
+    
+    await callback.answer("🔄 Загружаю следующие вакансии...")
+    
+    # Показываем следующую страницу
+    await show_vacancies_page(callback.message, session, state, subscription)
+
+
+@router.callback_query(F.data == "finish_viewing")
+async def finish_viewing(callback: CallbackQuery, state: FSMContext):
+    """Завершить просмотр вакансий"""
+    
+    await state.clear()
+    await callback.message.edit_text(
+        "✅ Просмотр завершён"
+    )
+    await callback.answer("До новых встреч!")
+
+
+@router.callback_query(F.data.startswith("delete_sub_"))
+async def delete_subscription(callback: CallbackQuery, session: AsyncSession):
+    """Удаление подписки"""
+    subscription_id = int(callback.data.split("_")[-1])
+    
+    # Получаем подписку
+    result = await session.execute(
+        select(Subscription).where(Subscription.id == subscription_id)
+    )
+    subscription = result.scalar_one_or_none()
+    
+    if not subscription:
+        await callback.answer("❌ Подписка не найдена")
+        return
+    
+    # Помечаем как неактивную
+    await session.delete(subscription)
+    await session.commit()
+    
+    await callback.message.edit_text(
+        f"🗑 Подписка удалена:\n\n"
+        f"🔍 <code>{subscription.keywords}</code>",
+        parse_mode="HTML"
+    )
+    await callback.answer("✅ Подписка удалена")
+
+
+@router.callback_query(F.data.startswith("pause_sub_"))
+async def pause_subscription(callback: CallbackQuery, session: AsyncSession):
+    """Приостановка подписки"""
+    subscription_id = int(callback.data.split("_")[-1])
+    
+    result = await session.execute(
+        select(Subscription).where(Subscription.id == subscription_id)
+    )
+    subscription = result.scalar_one_or_none()
+    
+    if not subscription:
+        await callback.answer("❌ Подписка не найдена")
+        return
+    
+    subscription.is_active = False
+    await session.commit()
+    
+    await callback.message.edit_text(
+        f"⏸ Подписка приостановлена:\n\n"
+        f"🔍 <code>{subscription.keywords}</code>",
+        parse_mode="HTML"
+    )
+    await callback.answer("✅ Подписка приостановлена")
