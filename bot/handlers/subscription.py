@@ -4,8 +4,9 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
+from datetime import datetime, timedelta
 
-from database.models import User, Subscription
+from database.models import User, Subscription, Vacancy
 from bot.keyboards.main_kb import get_main_keyboard, get_cancel_keyboard, get_subscription_actions
 from bot.states.subscription_states import SubscriptionStates
 from parser.hh_client import HHClient
@@ -247,7 +248,7 @@ async def show_subscriptions(message: Message, session: AsyncSession):
         )
 
 
-@router.message(F.text == "🔍 Тест поиска")
+@router.message(F.text == "🔍 Просмотр вакансий")
 async def choose_subscription_for_view(message: Message, session: AsyncSession, state: FSMContext):
     """Выбор подписки для просмотра вакансий"""
     
@@ -483,3 +484,54 @@ async def pause_subscription(callback: CallbackQuery, session: AsyncSession):
         parse_mode="HTML"
     )
     await callback.answer("✅ Подписка приостановлена")
+
+@router.message(F.text == "📊 Статистика")
+async def show_statistics(message: Message, session: AsyncSession):
+    """Показать статистику по вакансиям"""
+    
+    result = await session.execute(
+        select(User).where(User.telegram_id == message.from_user.id)
+    )
+    user = result.scalar_one_or_none()
+    
+    if not user:
+        await message.answer("❌ Пользователь не найден")
+        return
+    
+    result = await session.execute(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.is_active == True
+        )
+    )
+    active_subs = len(result.scalars().all())
+    
+    from sqlalchemy import func
+    result = await session.execute(
+        select(func.count(Vacancy.id))
+    )
+    total_vacancies = result.scalar()
+    
+    yesterday = datetime.utcnow() - timedelta(days=1)
+    result = await session.execute(
+        select(func.count(Vacancy.id)).where(Vacancy.published_at >= yesterday)
+    )
+    vacancies_24h = result.scalar()
+    
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    result = await session.execute(
+        select(func.count(Vacancy.id)).where(Vacancy.published_at >= week_ago)
+    )
+    vacancies_7d = result.scalar()
+    
+    stats_message = (
+        "📊 <b>Ваша статистика</b>\n\n"
+        f"📋 Активных подписок: <b>{active_subs}</b>\n\n"
+        "<b>Вакансии в базе:</b>\n"
+        f"📦 Всего: <code>{total_vacancies}</code>\n"
+        f"🆕 За 24 часа: <code>{vacancies_24h}</code>\n"
+        f"📅 За 7 дней: <code>{vacancies_7d}</code>\n\n"
+        "💡 Бот проверяет новые вакансии каждые 15 минут"
+    )
+    
+    await message.answer(stats_message)

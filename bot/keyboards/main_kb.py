@@ -6,7 +6,8 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="➕ Добавить подписку")],
         [KeyboardButton(text="📋 Мои подписки")],
-        [KeyboardButton(text="🔍 Тест поиска")],
+        [KeyboardButton(text="🔍 Просмотр вакансий")],
+        [KeyboardButton(text="📊 Статистика")], 
         [KeyboardButton(text="ℹ️ Помощь")]
     ]
     return ReplyKeyboardMarkup(
