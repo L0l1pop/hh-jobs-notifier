@@ -1,25 +1,85 @@
-version: '3.8'
+version: "3.9"
 
 services:
   postgres:
     image: postgres:16-alpine
     container_name: hh_jobs_postgres
     environment:
-      POSTGRES_DB: hh_jobs_bot
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: your_password
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7-alpine
     container_name: hh_jobs_redis
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hh_jobs_bot
+    env_file: .env
+    command: ["python", "-m", "bot.main"]  # запускаем из /app
+    #working_dir: /app                   # явно задаем рабочую директорию
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hh_jobs_celery_worker
+    env_file: .env
+    #working_dir: /app
+    command: ["celery", "-A", "celery_app", "worker", "--pool=solo", "--loglevel=info"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+
+  celery_beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hh_jobs_celery_beat
+    env_file: .env
+    #working_dir: /app
+    command: ["celery", "-A", "celery_app", "beat", "--loglevel=info"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./:/app
 
 volumes:
   postgres_data:

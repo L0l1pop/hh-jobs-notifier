@@ -88,7 +88,10 @@ async def process_subscription(
         
         for vacancy_data in vacancies_data.get('items', []):
             # Пытаемся сохранить вакансию
-            vacancy = await VacancyService.save_vacancy(session, vacancy_data)
+            try:
+                vacancy = await VacancyService.save_vacancy(session, vacancy_data)
+            except Exception as e:
+                await session.rollback()
             
             # Если вакансия новая (успешно сохранена)
             if vacancy:
