@@ -31,9 +31,7 @@ services:
       retries: 20
 
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: lol1pop/hh-jobs-bot:latest
     container_name: hh_jobs_bot
     env_file: .env
     command: ["python", "-m", "bot.main"]
@@ -47,9 +45,7 @@ services:
       - ./:/app
 
   celery_worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: lol1pop/hh-jobs-bot:latest
     container_name: hh_jobs_celery_worker
     env_file: .env
     command: ["celery", "-A", "celery_app", "worker", "--pool=solo", "--loglevel=info"]
@@ -63,10 +59,8 @@ services:
       - ./:/app
 
   celery_beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: hh_jobs_celery_beat
+    image: lol1pop/hh-jobs-bot:latest
+    container_name: hh_jobs_celery_beat_prod
     env_file: .env
     command: ["celery", "-A", "celery_app", "beat", "--loglevel=info"]
     depends_on:

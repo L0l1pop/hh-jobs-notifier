@@ -252,7 +252,6 @@ async def show_subscriptions(message: Message, session: AsyncSession):
 async def choose_subscription_for_view(message: Message, session: AsyncSession, state: FSMContext):
     """Выбор подписки для просмотра вакансий"""
     
-    # Получаем пользователя
     result = await session.execute(
         select(User).where(User.telegram_id == message.from_user.id)
     )
@@ -262,7 +261,6 @@ async def choose_subscription_for_view(message: Message, session: AsyncSession, 
         await message.answer("❌ Пользователь не найден")
         return
     
-    # Получаем все активные подписки
     result = await session.execute(
         select(Subscription).where(
             Subscription.user_id == user.id,
@@ -275,7 +273,6 @@ async def choose_subscription_for_view(message: Message, session: AsyncSession, 
         await message.answer("❌ У вас нет активных подписок")
         return
     
-    # Создаём inline-кнопки для выбора подписки
     buttons = []
     for sub in subscriptions:
         buttons.append([
@@ -300,7 +297,6 @@ async def view_subscription_vacancies(callback: CallbackQuery, session: AsyncSes
     
     subscription_id = int(callback.data.split("_")[-1])
     
-    # Получаем подписку
     result = await session.execute(
         select(Subscription).where(Subscription.id == subscription_id)
     )

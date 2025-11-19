@@ -17,7 +17,6 @@ class VacancyService:
     async def save_vacancy(session: AsyncSession, vacancy_data: dict) -> Optional[Vacancy]:
         hh_id = str(vacancy_data.get('id'))
 
-        # Проверка дубликатов
         result = await session.execute(
             select(Vacancy).where(Vacancy.hh_id == hh_id)
         )
@@ -25,7 +24,6 @@ class VacancyService:
         if existing:
             return None
 
-        # Зарплата (как у тебя)
         salary_data = vacancy_data.get('salary')
         if salary_data:
             salary_from = salary_data.get('from')
@@ -45,28 +43,20 @@ class VacancyService:
         else:
             salary = "Не указана"
 
-        # Парсинг даты публицации
         published_at_str = vacancy_data.get('published_at', '')
-        published_at = datetime.utcnow()  # fallback
+        published_at = datetime.utcnow()
         try:
-            # HH может вернуть ISO с Z или с оффсетом, пример: 2025-11-12T21:53:07+0300 или ...Z
             iso = published_at_str
             if iso.endswith('Z'):
-                # привести к aware-UTC
                 dt = datetime.fromisoformat(iso.replace('Z', '+00:00'))
             else:
-                # fromisoformat понимает +03:00, но не +0300 → нормализуем
                 if len(iso) >= 5 and (iso[-5] in ['+', '-']) and iso[-3] != ':':
-                    # превратить +0300 в +03:00
                     iso = iso[:-2] + ':' + iso[-2:]
                 dt = datetime.fromisoformat(iso)
-
-            # Приводим к UTC и делаем naive (без tzinfo), чтобы совпадало с TIMESTAMP WITHOUT TIME ZONE
             if dt.tzinfo is not None:
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
             published_at = dt
         except Exception:
-            # Оставляем fallback = utcnow()
             published_at = datetime.utcnow()
 
         vacancy = Vacancy(
@@ -75,7 +65,7 @@ class VacancyService:
             company=vacancy_data.get('employer', {}).get('name', 'Не указано'),
             salary=salary,
             url=vacancy_data.get('alternate_url', ''),
-            published_at=published_at,  # naive UTC
+            published_at=published_at
         )
 
         try:
@@ -84,7 +74,7 @@ class VacancyService:
             await session.refresh(vacancy)
             return vacancy
         except Exception:
-            # критично: чистим транзакцию, чтобы сессия была рабочей дальше
+            logger.error(f"Error saving vacancy: {e}", exc_info=True)
             await session.rollback()
             return None
     
