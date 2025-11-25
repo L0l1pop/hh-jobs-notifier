@@ -4,7 +4,7 @@ Telegram-бот для автоматического мониторинга в�
 
 ## 📋 Описание
 
-This is my pet project — an automated job notification system that monitors HeadHunter.ru vacancies and sends instant alerts to users via Telegram. Built with modern microservices architecture using Python, FastAPI, aiogram 3.x, and Docker to demonstrate practical skills in backend development and system design.
+Это мой pet-проект — система автоматического мониторинга вакансий на HeadHunter.ru с мгновенными оповещениями в Telegram. Бот регулярно отслеживает появление новых вакансий, соответствующих заданным фильтрам пользователя (ключевые слова, город, опыт, зарплата), и присылает уведомления только о свежих предложениях.
 
 ## ✨ Возможности
 
@@ -24,39 +24,22 @@ This is my pet project — an automated job notification system that monitors He
 - **SQLAlchemy 2.0** — ORM с async поддержкой
 - **Docker** — контейнеризация приложения
 - **HeadHunter API** — официальный API для получения вакансий
-## 📁 Структура проекта
-
-hh-jobs-notifier/
-├── bot/ # Telegram бот
-│ ├── handlers/ # Обработчики команд
-│ ├── keyboards/ # Клавиатуры
-│ ├── states/ # FSM состояния
-│ └── config.py # Конфигурация
-├── database/ # База данных
-│ ├── models.py # Модели SQLAlchemy
-│ └── database.py # Подключение к БД
-├── parser/ # Парсер HH API
-│ ├── hh_client.py # Клиент для API
-│ └── vacancy_service.py # Сервис вакансий
-├── tasks/ # Celery задачи
-│ └── vacancy_checker.py # Проверка новых вакансий
-├── celery_app.py # Конфигурация Celery
-├── logging_config.py # Настройка логирования
-├── docker-compose.yml # Docker конфигурация
-└── requirements.txt # Зависимости
 
 ## 🚀 Установка и запуск
 
 ### 1. Клонирование репозитория
 
 git clone https://github.com/L0l1pop/hh-jobs-notifier.git
+
 cd hh-jobs-notifier
 
 
 ### 2. Создание виртуального окружения
 
 python -m venv .venv
+
 source .venv/bin/activate # Linux/Mac
+
 или
 
 .venv\Scripts\activate # Windows
@@ -74,18 +57,27 @@ pip install -r requirements.txt
 Telegram
 
 BOT_TOKEN=your_bot_token_from_botfather
+
 ADMIN_ID=your_telegram_id
+
 Database
 
 DB_HOST=localhost
+
 DB_PORT=5432
+
 DB_NAME=hh_jobs_bot
+
 DB_USER=postgres
+
 DB_PASSWORD=your_password
+
 Redis
 
 REDIS_HOST=localhost
+
 REDIS_PORT=6379
+
 HH API
 
 HH_API_URL=https://api.hh.ru
